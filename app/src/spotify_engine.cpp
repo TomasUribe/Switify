@@ -3508,6 +3508,30 @@ void SpotifyEngine::playTracks(std::vector<Track> tracks, size_t startIndex,
   });
 }
 
+bool SpotifyEngine::sessionOnline() {
+  return currentState == State::Ready && ctx && ctx->session &&
+         ctx->session->isOnline();
+}
+
+bool SpotifyEngine::reloadCurrent() {
+  std::vector<Track> tracks;
+  std::string source;
+  size_t index = 0;
+  uint32_t position = 0;
+  {
+    std::lock_guard<std::mutex> lock(dataMutex);
+    if (!activePlaylistHasCurrent || activePlaylistIndex >= activePlaylist.size())
+      return false;
+    tracks = activePlaylist;
+    source = activeSourceName;
+    index = activePlaylistIndex;
+    position = computedPositionLocked();
+  }
+  nxlog::pushf("Reloading the current song at %u ms", position);
+  playTracks(std::move(tracks), index, source, position);
+  return true;
+}
+
 void SpotifyEngine::playPlaylistTrack(size_t index) {
   std::vector<Track> tracks;
   std::string sourceName;

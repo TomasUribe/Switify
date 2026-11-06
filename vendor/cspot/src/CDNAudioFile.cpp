@@ -6,6 +6,7 @@
 #include <initializer_list>  // for initializer_list
 #include <map>               // for operator!=, operator==
 #include <stdexcept>         // for runtime_error
+#include <string>            // for to_string
 #include <string_view>       // for string_view
 #include <type_traits>       // for remove_extent_t
 
@@ -148,7 +149,23 @@ size_t CDNAudioFile::readBytes(uint8_t* dst, size_t bytes) {
           cdnUrl,
           {bell::HTTPClient::RangeHeader::range(
               requestPosition, requestPosition + HTTP_BUFFER_SIZE - 1)});
+      // An error page used to be decrypted as if it were audio, which reaches the
+      // decoder as a gap. An address that stopped working will not recover: give
+      // up on this song right away. Anything else is retried like a lost socket.
+      const int status = this->httpConnection->statusCode();
+      if (status == 401 || status == 403 || status == 404 || status == 410) {
+        CSPOT_LOG(error, "Audio CDN refused the song: HTTP %d", status);
+        this->lastRequestPosition = 0;
+        this->lastRequestCapacity = 0;
+        return 0;
+      }
+      if (status < 200 || status >= 300)
+        throw std::runtime_error("Audio CDN returned HTTP " +
+                                 std::to_string(status));
+
       readCapacity = this->httpConnection->contentLength();
+      if (readCapacity == 0 || readCapacity > this->httpBuffer.size())
+        throw std::runtime_error("Audio CDN returned an unusable length");
 
       this->httpConnection->stream().read((char*)this->httpBuffer.data(),
                                           readCapacity);
@@ -168,12 +185,15 @@ size_t CDNAudioFile::readBytes(uint8_t* dst, size_t bytes) {
     } catch (const std::exception& e) {
       // A network failure must not propagate through the vorbis C call
       // frames above us (TrackPlayer::runTask has no handler). Invalidate
-      // the cache window and report EOF so the player survives and moves
-      // on to the next track.
+      // the cache window.
       CSPOT_LOG(error, "Failed to read audio chunk at %u: %s",
                 (unsigned int)requestPosition, e.what());
       this->lastRequestPosition = 0;
       this->lastRequestCapacity = 0;
+      this->readFailed = true;
+      // No retry here: retrying every second for 90 s (a TLS handshake each, on
+      // the system core) starved FS, graphics and audio while a game launched,
+      // and HOME failed to open. After a sleep SwitchU asks for ReloadCurrent.
       return 0;
     }
 

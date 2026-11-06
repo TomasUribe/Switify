@@ -159,6 +159,12 @@ void ServiceCore::publishSeekable(bool seekable, uint64_t monotonicMs) {
   changedLocked(monotonicMs);
 }
 
+void ServiceCore::publishReloading(bool reloading, uint64_t monotonicMs) {
+  std::scoped_lock lock(mutex);
+  setFlagLocked(SwitifyStatusFlag_Reloading, reloading);
+  changedLocked(monotonicMs);
+}
+
 void ServiceCore::publishResult(SwitifyControlResult result,
                                 uint64_t monotonicMs) {
   std::scoped_lock lock(mutex);
@@ -236,7 +242,8 @@ bool ServiceCore::isControlCommand(SwitifyIpcCommand command) {
   return (command >= SwitifyIpcCommand_PlayPause &&
           command <= SwitifyIpcCommand_SetAudioQuality) ||
          (command >= SwitifyIpcCommand_BrowseHome &&
-          command <= SwitifyIpcCommand_BrowseQueue);
+          command <= SwitifyIpcCommand_BrowseQueue) ||
+         command == SwitifyIpcCommand_ReloadCurrent;
 }
 
 SwitifyControlResult ServiceCore::validate(SwitifyIpcCommand command,

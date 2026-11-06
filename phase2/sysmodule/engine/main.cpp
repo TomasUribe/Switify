@@ -7,9 +7,12 @@
 #include <curl/curl.h>
 #include <switch.h>
 
+#include <reent.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <memory>
 #include <new>
@@ -47,20 +50,57 @@ uint32_t __nx_applet_type = AppletType_None;
 uint32_t __nx_fs_num_sessions = 2;
 
 void __libnx_initheap(void) {
-  // The artwork-enabled service performs authenticated browse requests whose
-  // transient JSON tree can overlap the player, artwork URL, and browse page.
-  // Three MiB was sufficient for playback alone but could exhaust the process
-  // as soon as Home, Library, Search, or a playlist was opened. Keep the Lite
-  // service at 3 MiB and restore the hardware-proven 4 MiB ceiling here.
-#ifdef SWITIFY_LIGHTWEIGHT_OVERLAY
-  static char heap[3 * 1024 * 1024];
-#else
-  static char heap[4 * 1024 * 1024];
-#endif
+  // malloc's memory comes from _sbrk_r below. This small block only serves
+  // libnx's own startup (argv), which carves from the fake heap.
+  static char startup[0x1000];
   extern char* fake_heap_start;
   extern char* fake_heap_end;
-  fake_heap_start = heap;
-  fake_heap_end = heap + sizeof(heap);
+  fake_heap_start = startup;
+  fake_heap_end = startup + sizeof(startup);
+}
+
+// The heap is committed in 2 MiB steps (the kernel's heap granularity) as
+// malloc asks for it, up to the ceiling. A fixed static heap counted the whole
+// ceiling against the system's memory from the start, though playback uses under
+// 2 MiB, and the system has little to spare: with 4 MiB fixed, opening HOME
+// over a game ran the system services out of memory (FS sessions closed, the
+// menu's GPU start hung).
+//
+// The artwork-enabled service performs authenticated browse requests whose
+// transient JSON tree can overlap the player, artwork URL, and browse page.
+// Three MiB was sufficient for playback alone but could exhaust the process
+// as soon as Home, Library, Search, or a playlist was opened. Keep the Lite
+// service at 3 MiB and restore the hardware-proven 4 MiB ceiling here.
+// Called with newlib's malloc lock held.
+void* _sbrk_r(struct _reent* reent, ptrdiff_t increment) {
+#ifdef SWITIFY_LIGHTWEIGHT_OVERLAY
+  constexpr size_t Ceiling = 3 * 1024 * 1024;
+#else
+  constexpr size_t Ceiling = 4 * 1024 * 1024;
+#endif
+  constexpr size_t Step = 0x200000;
+  static char* base = nullptr;
+  static size_t committed = 0;
+  static size_t used = 0;
+
+  if (increment < 0 && static_cast<size_t>(-increment) > used) {
+    reent->_errno = EINVAL;
+    return reinterpret_cast<void*>(-1);
+  }
+  const size_t want = used + increment;
+  if (want > committed) {
+    const size_t size = std::min((want + Step - 1) & ~(Step - 1), Ceiling);
+    void* address = nullptr;
+    if (want > Ceiling || R_FAILED(svcSetHeapSize(&address, size))) {
+      reent->_errno = ENOMEM;
+      return reinterpret_cast<void*>(-1);
+    }
+    base = static_cast<char*>(address);
+    committed = size;
+  }
+  char* previous = base + used;
+  used = want;
+  return previous;
 }
 
 void __appInit(void) {

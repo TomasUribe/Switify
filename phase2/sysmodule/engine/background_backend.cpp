@@ -1,6 +1,7 @@
 #include "background_backend.hpp"
 
 #include "NXConsoleLog.h"
+#include "TrackPlayer.h"
 #include "app_settings.hpp"
 
 #include <algorithm>
@@ -122,7 +123,37 @@ void BackgroundBackend::process(const ControlMessage& message) {
   auto result = ready ? SwitifyControlResult_Ok
                       : SwitifyControlResult_BackendUnavailable;
 
+  // The song's loaded audio ran out and it is held: playing it means loading
+  // it again once the connection is back.
+  if (cspot::streamStalled && engine.nowPlaying().paused &&
+      (message.command == SwitifyIpcCommand_PlayPause ||
+       message.command == SwitifyIpcCommand_Play)) {
+    armReload();
+    core.publishResult(SwitifyControlResult_Ok, monotonicMs());
+    publishSnapshot();
+    return;
+  }
+  // Pausing while it waits means it should stay paused.
+  if (reloadPending && (message.command == SwitifyIpcCommand_PlayPause ||
+                        message.command == SwitifyIpcCommand_Pause)) {
+    nxlog::push("Pending song reload cancelled");
+    reloadPending = false;
+    if (ready && !engine.nowPlaying().paused) engine.playPause();
+    core.publishResult(result, monotonicMs());
+    publishSnapshot();
+    return;
+  }
+
   switch (message.command) {
+    case SwitifyIpcCommand_ReloadCurrent:
+      armReload();
+      // Meanwhile what the old stream had loaded plays; cspot then holds the
+      // song (holdOnStreamLoss) instead of ending it.
+      cspot::holdOnStreamLoss = true;
+      if (ready && engine.nowPlaying().paused && !cspot::streamStalled)
+        engine.playPause();
+      result = SwitifyControlResult_Ok;
+      break;
     case SwitifyIpcCommand_PlayPause:
       if (ready) engine.playPause();
       break;
@@ -875,6 +906,64 @@ void BackgroundBackend::publishSnapshot() {
   core.publishSeekable(playback.hasTrack && playback.durationMs != 0, now);
 }
 
+void BackgroundBackend::armReload() {
+  nxlog::push("Song reload requested; waiting for the connection");
+  reloadPending = true;
+  reloadOnline = false;
+  reloadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(45);
+}
+
+void BackgroundBackend::pollPendingReload() {
+  const auto now = std::chrono::steady_clock::now();
+  if (!cspot::streamStalled) {
+    stalledSeen = false;
+  } else if (!stalledSeen) {
+    stalledSeen = true;
+    stalledSince = now;
+  } else if (now - stalledSince >= std::chrono::milliseconds(1500) &&
+             !engine.nowPlaying().paused) {
+    // The decoded tail has been heard by now: stop the song's clock there, so
+    // the reload starts where the sound stopped.
+    nxlog::push("Loaded audio played out; waiting for the reload");
+    engine.playPause();
+    if (!reloadPending) armReload();
+    publishSnapshot();
+  }
+  const bool reloading = reloadPending || cspot::streamStalled;
+  if (reloading != reloadingPublished) {
+    reloadingPublished = reloading;
+    core.publishReloading(reloading, monotonicMs());
+  }
+
+  if (!reloadPending) return;
+  if (now >= reloadDeadline) {
+    // Still no connection: it stays paused rather than skipping songs in vain
+    // (a held song waits for Play).
+    nxlog::push("Song reload given up: no connection");
+    reloadPending = false;
+    return;
+  }
+
+  // Spotify's session being back is what matters (no nifm session held open:
+  // the official build has none, and this one should not differ there).
+  if (!engine.sessionOnline()) {
+    reloadOnline = false;
+    return;
+  }
+  // Right after a wake the old session can still look alive for a moment; asking
+  // it for the song then would fail. It has to hold for a little while.
+  constexpr auto StableFor = std::chrono::milliseconds(1500);
+  if (!reloadOnline) {
+    reloadOnline = true;
+    reloadOnlineSince = now;
+    return;
+  }
+  if (now - reloadOnlineSince < StableFor) return;
+  reloadPending = false;
+  if (!engine.reloadCurrent()) nxlog::push("Song reload: nothing to reload");
+  publishSnapshot();
+}
+
 void BackgroundBackend::run() {
   auto nextSnapshot = std::chrono::steady_clock::now();
   auto nextResourceLog =
@@ -887,6 +976,7 @@ void BackgroundBackend::run() {
       for (size_t processed = 0; processed < 8 && core.tryPop(message);
            ++processed)
         process(message);
+      pollPendingReload();
 
       const auto now = std::chrono::steady_clock::now();
       if (now >= nextSnapshot) {

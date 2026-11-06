@@ -2,8 +2,15 @@
 
 #include "ipc_server.h"
 #include "switify/ipc_protocol.h"
+#include "switify/spectrum_analyzer.hpp"
+#include "NXConsoleLog.h"
 
 #include <cstring>
+#include <new>
+
+// targets/switch/NXAudioSink.cpp
+void nxAudioTapRead(int16_t* stereo, size_t frames);
+uint32_t nxAudioTapPosition();
 
 namespace switify::phase2::switch_service {
 namespace {
@@ -19,6 +26,39 @@ uint64_t monotonicMs() {
 Result controlResult(SwitifyControlResult result) {
   if (result == SwitifyControlResult_Ok) return 0;
   return MAKERESULT(ResultModule, (uint32_t)result);
+}
+
+// Only runs when someone asks (SwitchU's bars, on screen), so a game playing
+// alongside this service pays nothing for it. On the IPC thread, whose stack is
+// small: the buffers live elsewhere.
+bool audioLevels(SwitifyIpcAudioLevels& out) {
+  static_assert(sizeof(out.bands) == SpectrumAnalyzer::kBands);
+  constexpr int Frames = 1024;
+  static int16_t samples[Frames * 2];
+  static SpectrumAnalyzer* analyzer = new (std::nothrow) SpectrumAnalyzer();
+  if (!analyzer) return false;
+  // Nothing new since the last request: nothing is sounding, whatever the ring
+  // still holds. Paused or waiting for the network, the bars must lie flat.
+  static uint32_t lastPosition = 0;
+  const uint32_t position = nxAudioTapPosition();
+  if (position == lastPosition) return true;
+  lastPosition = position;
+  static bool first = true;
+  if (first) nxlog::push("Audio levels: first request");
+  try {
+    nxAudioTapRead(samples, Frames);
+    analyzer->analyze(samples, Frames, 48000);
+  } catch (...) {
+    nxlog::push("Audio levels: failed");
+    return false;
+  }
+  if (first) nxlog::push("Audio levels: first request done");
+  first = false;
+  float levels[SpectrumAnalyzer::kBands];
+  analyzer->read(levels);
+  for (int i = 0; i < SpectrumAnalyzer::kBands; ++i)
+    out.bands[i] = static_cast<uint8_t>(levels[i] * 255.f);
+  return true;
 }
 
 template <typename T>
@@ -61,6 +101,12 @@ Result handle(void*, const SwitifyIpcServerRequest* request, uint8_t* output,
     case SwitifyIpcCommand_GetStatus: {
       const SwitifyIpcStatus status = serviceCore->snapshot();
       return writeOutput(output, outputSize, status);
+    }
+    case SwitifyIpcCommand_GetAudioLevels: {
+      SwitifyIpcAudioLevels levels{};
+      if (!audioLevels(levels))
+        return controlResult(SwitifyControlResult_BackendUnavailable);
+      return writeOutput(output, outputSize, levels);
     }
     case SwitifyIpcCommand_GetBrowseHeader: {
       const SwitifyIpcBrowseHeader header = serviceCore->browseHeader();

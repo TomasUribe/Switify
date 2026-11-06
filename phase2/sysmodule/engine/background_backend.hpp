@@ -26,6 +26,17 @@ class BackgroundBackend {
   void process(const ControlMessage& message);
   void publishSnapshot();
   void publishArtworkUrl(const std::string& url);
+  void pollPendingReload();
+  void armReload();
+  // ReloadCurrent, waiting for the internet and Spotify's session to be back.
+  bool reloadPending = false;
+  std::chrono::steady_clock::time_point reloadDeadline{};
+  std::chrono::steady_clock::time_point reloadOnlineSince{};
+  bool reloadOnline = false;
+  // When cspot started holding the song (its loaded audio ran out).
+  std::chrono::steady_clock::time_point stalledSince{};
+  bool stalledSeen = false;
+  bool reloadingPublished = false;
   SwitifyControlResult processBrowse(const ControlMessage& message);
 
   enum class BrowseEntryType {

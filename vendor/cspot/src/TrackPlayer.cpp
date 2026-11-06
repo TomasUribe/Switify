@@ -190,26 +190,31 @@ void TrackPlayer::runTask() {
       // thread, which invokes std::terminate and kills the whole application.
       // Retry the same song, then fail it gracefully if connectivity does not
       // return instead of crashing Switify.
+      constexpr int StreamOpenAttempts = 4;
       bool streamOpened = false;
       for (int attempt = 1;
-           attempt <= 4 && isRunning && !pendingReset && currentSongPlaying;
+           attempt <= StreamOpenAttempts && isRunning && !pendingReset &&
+           currentSongPlaying;
            ++attempt) {
         try {
           currentTrackStream = track->getAudioFile();
           currentTrackStream->openStream();
           streamOpened = true;
+          // A fresh stream: only the one that crossed the sleep is held.
+          holdOnStreamLoss = false;
           if (attempt > 1)
             CSPOT_LOG(info, "Audio stream recovered on attempt %d", attempt);
           break;
         } catch (const std::exception& error) {
-          CSPOT_LOG(error, "Audio stream open attempt %d/4 failed: %s",
-                    attempt, error.what());
+          CSPOT_LOG(error, "Audio stream open attempt %d/%d failed: %s",
+                    attempt, StreamOpenAttempts, error.what());
         } catch (...) {
-          CSPOT_LOG(error, "Audio stream open attempt %d/4 failed", attempt);
+          CSPOT_LOG(error, "Audio stream open attempt %d/%d failed", attempt,
+                    StreamOpenAttempts);
         }
 
         currentTrackStream = nullptr;
-        if (attempt < 4 && isRunning && !pendingReset)
+        if (attempt < StreamOpenAttempts && isRunning && !pendingReset)
           BELL_SLEEP_MS(750);
       }
 
@@ -244,6 +249,7 @@ void TrackPlayer::runTask() {
       }
 
       eof = false;
+      int consecutiveHoles = 0;
       track->loading = true;
 
       CSPOT_LOG(info, "Playing");
@@ -263,14 +269,32 @@ void TrackPlayer::runTask() {
         long ret = VORBIS_READ(&vorbisFile, (char*)&pcmBuffer[0],
                                pcmBuffer.size(), &currentSection);
 
-        if (ret == 0) {
+        if (ret == 0 && holdOnStreamLoss && currentTrackStream &&
+            currentTrackStream->readFailed) {
+          // Woken from sleep: what was loaded has played. The song waits for
+          // its reload, which resets this player, rather than ending here.
+          // (Only waiting: no reads, so no connection attempts.)
+          CSPOT_LOG(info, "Stream lost; holding the song for its reload");
+          streamStalled = true;
+          while (holdOnStreamLoss && currentSongPlaying && !pendingReset &&
+                 isRunning)
+            BELL_SLEEP_MS(100);
+          streamStalled = false;
+          eof = true;  // ends the song only if nothing reset it
+        } else if (ret == 0) {
           CSPOT_LOG(info, "EOF");
           // and done :)
           eof = true;
+        } else if (ret == OV_HOLE && ++consecutiveHoles <= 16) {
+          // A gap in the data, which waking from sleep can leave. The decoder
+          // resynchronises on its own. Treating it as fatal changed the song.
+          // (Only a few in a row: a stream of nothing but gaps must not spin.)
+          CSPOT_LOG(error, "Gap in the audio stream; continuing");
         } else if (ret < 0) {
           CSPOT_LOG(error, "An error has occured in the stream %d", ret);
           currentSongPlaying = false;
         } else {
+          consecutiveHoles = 0;
           if (this->dataCallback != nullptr) {
             auto toWrite = ret;
 
@@ -302,7 +326,8 @@ void TrackPlayer::runTask() {
       track->loading = false;
     }
 
-    if (eof) {
+    // (A read abandoned for a skip also reads as EOF; that is not the song ending.)
+    if (eof && currentSongPlaying) {
       const bool restarted = this->eofCallback();
       if (restarted) {
         track = nullptr;

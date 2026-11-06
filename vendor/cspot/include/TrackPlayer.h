@@ -24,6 +24,12 @@ class WrappedSemaphore;
 #endif
 
 namespace cspot {
+// SwitchU fork. A stream that crossed a console sleep has lost its connection:
+// what it had loaded still plays, then, while this is set, the song waits
+// (streamStalled) for the service to load it again instead of ending.
+inline std::atomic<bool> holdOnStreamLoss{false};
+inline std::atomic<bool> streamStalled{false};
+
 class TrackProvider;
 class TrackQueue;
 struct Context;

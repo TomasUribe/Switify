@@ -46,6 +46,7 @@ class ServiceCore {
   void publishRepeat(SwitifyRepeatMode mode, uint64_t monotonicMs);
   void publishAudioQuality(bool highQuality, uint64_t monotonicMs);
   void publishSeekable(bool seekable, uint64_t monotonicMs);
+  void publishReloading(bool reloading, uint64_t monotonicMs);
   void publishResult(SwitifyControlResult result, uint64_t monotonicMs);
   uint64_t beginBrowse(std::string_view title, std::string_view subtitle,
                        uint32_t depth, uint64_t monotonicMs);

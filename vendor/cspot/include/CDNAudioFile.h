@@ -52,6 +52,9 @@ class CDNAudioFile {
   */
   void seek(size_t position);
 
+  // Its connection failed while reading (not the end of the file).
+  bool readFailed = false;
+
  private:
   const int OPUS_HEADER_SIZE = 8 * 1024;
   const int OPUS_FOOTER_PREFFERED = 1024 * 12;  // 12K should be safe

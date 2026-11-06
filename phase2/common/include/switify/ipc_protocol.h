@@ -49,6 +49,11 @@ typedef enum SwitifyIpcCommand {
     SwitifyIpcCommand_BrowsePlay = 35,
     SwitifyIpcCommand_BrowseCurrentPlaylist = 36,
     SwitifyIpcCommand_BrowseQueue = 37,
+
+    // SwitchU fork: what is playing now, for its bars. Unknown to official builds.
+    SwitifyIpcCommand_GetAudioLevels = 38,
+    // Once there is internet again, start the current song afresh at its position.
+    SwitifyIpcCommand_ReloadCurrent = 39,
 } SwitifyIpcCommand;
 
 typedef enum SwitifyIpcCapability {
@@ -94,6 +99,8 @@ typedef enum SwitifyStatusFlag {
     SwitifyStatusFlag_CanSeek = 1u << 5u,
     SwitifyStatusFlag_HasTrack = 1u << 6u,
     SwitifyStatusFlag_HighQuality = 1u << 7u,
+    // SwitchU fork: a song is waiting to be loaded again (after a sleep).
+    SwitifyStatusFlag_Reloading = 1u << 8u,
 } SwitifyStatusFlag;
 
 typedef enum SwitifyControlResult {
@@ -157,6 +164,10 @@ typedef struct SwitifyIpcBrowseRequest {
     char query[SWITIFY_IPC_BROWSE_QUERY_SIZE];
 } SwitifyIpcBrowseRequest;
 
+typedef struct SwitifyIpcAudioLevels {
+    uint8_t bands[32]; // 0-255, from 50 Hz to 16 kHz
+} SwitifyIpcAudioLevels;
+
 // Exactly one TLS-backed inline CMIF response (216 bytes). Adding fields
 // requires a new
 // status ABI version; old fields must retain their offsets.
@@ -191,4 +202,6 @@ static_assert(sizeof(SwitifyIpcBrowseItem) == SWITIFY_IPC_BROWSE_ITEM_SIZE,
               "Switify browse item ABI changed");
 static_assert(sizeof(SwitifyIpcBrowseRequest) == 144,
               "Switify browse request ABI changed");
+static_assert(sizeof(SwitifyIpcAudioLevels) == 32,
+              "Switify audio levels ABI changed");
 #endif

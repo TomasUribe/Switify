@@ -6,6 +6,30 @@
 
 #include "NXConsoleLog.h"
 
+namespace {
+// The last output frames before volume, for the SwitchU fork's GetAudioLevels.
+// Written by the player, read by the IPC thread: a torn read is a glitch in a
+// bar for one poll, not worth a lock on the audio path.
+constexpr size_t TapFrames = 1024;
+int16_t tapRing[TapFrames * 2]{};
+std::atomic<uint32_t> tapHead{0};
+}  // namespace
+
+uint32_t nxAudioTapPosition() {
+  return tapHead.load(std::memory_order_relaxed);
+}
+
+void nxAudioTapRead(int16_t* stereo, size_t frames) {
+  frames = std::min(frames, TapFrames);
+  const uint32_t head = tapHead.load(std::memory_order_relaxed);
+  const uint32_t first = head + static_cast<uint32_t>(TapFrames - frames);
+  for (size_t i = 0; i < frames; ++i) {
+    const size_t slot = (first + i) % TapFrames;
+    stereo[i * 2] = tapRing[slot * 2];
+    stereo[i * 2 + 1] = tapRing[slot * 2 + 1];
+  }
+}
+
 NXAudioSink::NXAudioSink() {
   initializeResampler();
   for (int i = 0; i < BUFFER_COUNT; i++) {
@@ -216,6 +240,13 @@ void NXAudioSink::pushOutputFrame(float left, float right) {
     left *= equalizerHeadroom;
     right *= equalizerHeadroom;
   }
+  const uint32_t tap = tapHead.load(std::memory_order_relaxed);
+  tapRing[(tap % TapFrames) * 2] = static_cast<int16_t>(
+      std::clamp(left, -32768.0f, 32767.0f));
+  tapRing[(tap % TapFrames) * 2 + 1] = static_cast<int16_t>(
+      std::clamp(right, -32768.0f, 32767.0f));
+  tapHead.store(tap + 1, std::memory_order_relaxed);
+
   const float gain = volume.load();
   const int16_t l = static_cast<int16_t>(std::lrintf(
       std::clamp(left * gain, -32768.0f, 32767.0f)));

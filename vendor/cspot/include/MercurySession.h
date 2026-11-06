@@ -99,6 +99,8 @@ class MercurySession : public bell::Task, public cspot::Session {
 
   bool triggerTimeout() override;
 
+  bool isOnline() const { return isRunning && !isReconnecting; }
+
  private:
   const int PING_TIMEOUT_MS = 2 * 60 * 1000 + 5000;
 
