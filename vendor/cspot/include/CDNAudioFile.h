@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>   // for atomic
 #include <cstddef>  // for size_t
 #include <cstdint>  // for uint8_t
 #include <memory>   // for shared_ptr, unique_ptr
@@ -55,14 +56,26 @@ class CDNAudioFile {
   // Its connection failed while reading (not the end of the file).
   bool readFailed = false;
 
+  // SwitchU fork: false while the connection is known to be down (after a
+  // sleep, until the service sees Spotify online again). No requests then: a
+  // connection attempt can block the decoder for seconds.
+  static inline std::atomic<bool> networkUp{true};
+
  private:
   const int OPUS_HEADER_SIZE = 8 * 1024;
   const int OPUS_FOOTER_PREFFERED = 1024 * 12;  // 12K should be safe
   const int SEEK_MARGIN_SIZE = 1024 * 4;
 
   // A larger compressed window removes most per-14-KiB HTTP round trips.
-  // At 160 kbps this holds roughly 3.2 seconds while costing only 64 KiB.
-  const int HTTP_BUFFER_SIZE = 1024 * 64;
+  // SwitchU fork: at least LOOKAHEAD stays downloaded ahead of the decoder
+  // (about 4.8 s at 320 kbps, 9.6 s at 160), topped up as it plays, so a pause
+  // (a sleep) always leaves that much to play while the connection comes back.
+  const int HTTP_BUFFER_SIZE = 1024 * 256;
+  const int LOOKAHEAD = 1024 * 192;
+  bool topUpFailed = false;
+  size_t fetchRange(size_t start, size_t length, uint8_t* dst);
+  size_t fetchRangeOnce(size_t start, size_t length, uint8_t* dst);
+  void topUp(size_t offsetPosition);
   const int SPOTIFY_OPUS_HEADER = 167;
 
   // Used to store opus metadata, speeds up read
@@ -70,7 +83,7 @@ class CDNAudioFile {
   std::vector<uint8_t> footer;
 
   // General purpose buffer to read data
-  std::vector<uint8_t> httpBuffer = std::vector<uint8_t>(HTTP_BUFFER_SIZE);
+  std::vector<uint8_t> httpBuffer;  // allocated when the stream opens
 
   // AES IV for decrypting the audio stream
   const std::vector<uint8_t> audioAESIV = {0x72, 0xe0, 0x67, 0xfb, 0xdd, 0xcb,

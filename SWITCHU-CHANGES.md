@@ -13,6 +13,18 @@ like the original. Only the background service needs to be replaced.
   tail plays, the song pauses there and the reload starts it at that point. Status
   flag `SwitifyStatusFlag_Reloading` (bit 8) is set meanwhile, for SwitchU's
   "Reconnecting..." label. Play on a held song asks for the reload again.
+- **Read-ahead, and the same stream reads on.** `CDNAudioFile` keeps at least 192 KiB
+  downloaded ahead (about 4.8 s at 320 kbps), so a sleep always leaves that much
+  to play. While the connection is known to be down it makes no requests. Once
+  Spotify is online again the held stream reads on from the byte it stopped at:
+  no jump, and no gap if it came back in time. Only if that fails (an expired
+  address) is the song reloaded, at the decoder's position (`ov_time_tell`), not
+  the clock's.
+- **A bad CDN answer drops the connection.** Only a 206 starting at the byte asked
+  for is used; anything else (or a failure) replaces the kept-alive connection. An
+  unread body left on it after a wake made every later request fail, and the song
+  ended. An end far from the file's end counts as a lost stream, not the song's
+  end. Songs stay held this way until 60 s after the connection came back.
 - **New IPC command `GetAudioLevels` (38).** Returns 32 band levels of what is
   playing, for SwitchU's bars. They are computed only when requested, so nothing
   runs while a game plays unless a client asks (`switify_service.cpp`,

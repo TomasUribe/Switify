@@ -3513,7 +3513,7 @@ bool SpotifyEngine::sessionOnline() {
          ctx->session->isOnline();
 }
 
-bool SpotifyEngine::reloadCurrent() {
+bool SpotifyEngine::reloadCurrent(uint32_t positionMs) {
   std::vector<Track> tracks;
   std::string source;
   size_t index = 0;
@@ -3525,7 +3525,7 @@ bool SpotifyEngine::reloadCurrent() {
     tracks = activePlaylist;
     source = activeSourceName;
     index = activePlaylistIndex;
-    position = computedPositionLocked();
+    position = positionMs != UINT32_MAX ? positionMs : computedPositionLocked();
   }
   nxlog::pushf("Reloading the current song at %u ms", position);
   playTracks(std::move(tracks), index, source, position);

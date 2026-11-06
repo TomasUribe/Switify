@@ -37,6 +37,19 @@ class BackgroundBackend {
   std::chrono::steady_clock::time_point stalledSince{};
   bool stalledSeen = false;
   bool reloadingPublished = false;
+  // The held stream was told to read on; the reload waits for how that went.
+  bool retrySent = false;
+  std::chrono::steady_clock::time_point retrySentAt{};
+  bool pausedForStall = false;  // the clock stopped where the sound did
+  bool resumeWanted = false;    // could not resume at the wake: do it online
+  bool reloadGaveUp = false;    // until Play, or the hold ends
+  // Wi-Fi stays shaky for a while after a wake: songs are held, not skipped,
+  // until this long after the connection came back.
+  std::chrono::steady_clock::time_point holdReleaseAt{};
+  void settleReload(std::chrono::steady_clock::time_point now) {
+    reloadPending = false;
+    holdReleaseAt = now + std::chrono::seconds(60);
+  }
   SwitifyControlResult processBrowse(const ControlMessage& message);
 
   enum class BrowseEntryType {

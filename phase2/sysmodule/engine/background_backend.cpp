@@ -138,6 +138,9 @@ void BackgroundBackend::process(const ControlMessage& message) {
                         message.command == SwitifyIpcCommand_Pause)) {
     nxlog::push("Pending song reload cancelled");
     reloadPending = false;
+    retrySent = false;
+    pausedForStall = false;
+    resumeWanted = false;
     if (ready && !engine.nowPlaying().paused) engine.playPause();
     core.publishResult(result, monotonicMs());
     publishSnapshot();
@@ -145,15 +148,25 @@ void BackgroundBackend::process(const ControlMessage& message) {
   }
 
   switch (message.command) {
-    case SwitifyIpcCommand_ReloadCurrent:
+    case SwitifyIpcCommand_ReloadCurrent: {
       armReload();
-      // Meanwhile what the old stream had loaded plays; cspot then holds the
-      // song (holdOnStreamLoss) instead of ending it.
+      retrySent = false;
+      pausedForStall = false;
+      // Meanwhile what the old stream had loaded plays (at least a few seconds:
+      // CDNAudioFile's LOOKAHEAD); cspot then holds the song instead of ending
+      // it, and makes no requests until the connection is back.
       cspot::holdOnStreamLoss = true;
-      if (ready && engine.nowPlaying().paused && !cspot::streamStalled)
-        engine.playPause();
+      holdReleaseAt = std::chrono::steady_clock::time_point::max();
+      cspot::CDNAudioFile::networkUp = false;
+      const bool paused = engine.nowPlaying().paused;
+      const bool resumed = ready && paused && !cspot::streamStalled;
+      if (resumed) engine.playPause();
+      // Not now (no engine yet, or a song held since before this sleep): once
+      // the connection is back.
+      resumeWanted = paused && !resumed;
       result = SwitifyControlResult_Ok;
       break;
+    }
     case SwitifyIpcCommand_PlayPause:
       if (ready) engine.playPause();
       break;
@@ -909,27 +922,38 @@ void BackgroundBackend::publishSnapshot() {
 void BackgroundBackend::armReload() {
   nxlog::push("Song reload requested; waiting for the connection");
   reloadPending = true;
+  reloadGaveUp = false;
   reloadOnline = false;
   reloadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(45);
 }
 
+// After a sleep. Best: the old stream reads on from the byte it stopped at,
+// which no one hears (it is still playing what it had, or it waits where the
+// sound stopped). Failing that, the song again from where its sound stopped.
 void BackgroundBackend::pollPendingReload() {
   const auto now = std::chrono::steady_clock::now();
-  if (!cspot::streamStalled) {
+  const bool stalled = cspot::streamStalled;
+  if (!stalled) {
     stalledSeen = false;
+    reloadGaveUp = false;
   } else if (!stalledSeen) {
     stalledSeen = true;
     stalledSince = now;
   } else if (now - stalledSince >= std::chrono::milliseconds(1500) &&
-             !engine.nowPlaying().paused) {
-    // The decoded tail has been heard by now: stop the song's clock there, so
-    // the reload starts where the sound stopped.
-    nxlog::push("Loaded audio played out; waiting for the reload");
+             !pausedForStall && !engine.nowPlaying().paused) {
+    // The decoded tail has been heard by now: stop the song's clock there.
+    nxlog::push("Loaded audio played out; waiting for the connection");
     engine.playPause();
-    if (!reloadPending) armReload();
+    pausedForStall = true;
     publishSnapshot();
   }
-  const bool reloading = reloadPending || cspot::streamStalled;
+  if (stalled && !reloadPending && !reloadGaveUp) armReload();
+  if (cspot::holdOnStreamLoss && !reloadPending && !stalled &&
+      now >= holdReleaseAt) {
+    nxlog::push("Stream hold released");
+    cspot::holdOnStreamLoss = false;
+  }
+  const bool reloading = reloadPending || stalled;
   if (reloading != reloadingPublished) {
     reloadingPublished = reloading;
     core.publishReloading(reloading, monotonicMs());
@@ -940,7 +964,12 @@ void BackgroundBackend::pollPendingReload() {
     // Still no connection: it stays paused rather than skipping songs in vain
     // (a held song waits for Play).
     nxlog::push("Song reload given up: no connection");
-    reloadPending = false;
+    settleReload(now);
+    reloadGaveUp = stalled;
+    retrySent = false;
+    pausedForStall = false;
+    resumeWanted = false;
+    cspot::CDNAudioFile::networkUp = true;
     return;
   }
 
@@ -959,8 +988,50 @@ void BackgroundBackend::pollPendingReload() {
     return;
   }
   if (now - reloadOnlineSince < StableFor) return;
-  reloadPending = false;
-  if (!engine.reloadCurrent()) nxlog::push("Song reload: nothing to reload");
+
+  if (!cspot::CDNAudioFile::networkUp) {
+    nxlog::push("Connection back");
+    cspot::CDNAudioFile::networkUp = true;
+  }
+  if (resumeWanted && !stalled) {
+    resumeWanted = false;
+    if (engine.nowPlaying().paused) engine.playPause();
+  }
+
+  if (retrySent) {
+    const int outcome = cspot::streamRetryResult;
+    if (outcome == 0 && now - retrySentAt < std::chrono::seconds(20)) return;
+    retrySent = false;
+    settleReload(now);
+    if (outcome == 1) {
+      nxlog::push("The song reads on where it stopped");
+      if ((pausedForStall || resumeWanted) && engine.nowPlaying().paused)
+        engine.playPause();
+      pausedForStall = false;
+      resumeWanted = false;
+      publishSnapshot();
+      return;
+    }
+    // The old stream cannot go on (its address may have expired). The reload
+    // plays by itself.
+    pausedForStall = false;
+    resumeWanted = false;
+    if (!engine.reloadCurrent(cspot::stalledAtMs))
+      nxlog::push("Song reload: nothing to reload");
+    publishSnapshot();
+    return;
+  }
+  if (stalled) {
+    cspot::streamRetryResult = 0;
+    cspot::streamRetry = true;
+    retrySent = true;
+    retrySentAt = now;
+    nxlog::push("The held stream reads on");
+    return;
+  }
+  // Not dry yet: the stream fetches the rest by itself, with no jump.
+  nxlog::push("Connection back before the loaded audio ran out");
+  settleReload(now);
   publishSnapshot();
 }
 

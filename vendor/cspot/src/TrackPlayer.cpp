@@ -18,7 +18,9 @@
   (ov_time_seek(file, (double)position / 1000))
 #define VORBIS_READ(file, buffer, bufferSize, section) \
   (ov_read(file, buffer, bufferSize, 0, 2, 1, section))
+#define VORBIS_TELL_MS(file) ((uint32_t)(ov_time_tell(file) * 1000))
 #else
+#define VORBIS_TELL_MS(file) ((uint32_t)ov_time_tell(file))
 #define VORBIS_SEEK(file, position) (ov_time_seek(file, position))
 #define VORBIS_READ(file, buffer, bufferSize, section) \
   (ov_read(file, buffer, bufferSize, section))
@@ -200,8 +202,6 @@ void TrackPlayer::runTask() {
           currentTrackStream = track->getAudioFile();
           currentTrackStream->openStream();
           streamOpened = true;
-          // A fresh stream: only the one that crossed the sleep is held.
-          holdOnStreamLoss = false;
           if (attempt > 1)
             CSPOT_LOG(info, "Audio stream recovered on attempt %d", attempt);
           break;
@@ -250,6 +250,7 @@ void TrackPlayer::runTask() {
 
       eof = false;
       int consecutiveHoles = 0;
+      bool retrying = false;
       track->loading = true;
 
       CSPOT_LOG(info, "Playing");
@@ -269,17 +270,44 @@ void TrackPlayer::runTask() {
         long ret = VORBIS_READ(&vorbisFile, (char*)&pcmBuffer[0],
                                pcmBuffer.size(), &currentSection);
 
+        // Ending far from the file's end is a broken stream, not the song's
+        // end (bad data reads to the decoder as another bitstream: EOF).
+        const bool endedEarly =
+            ret == 0 && currentTrackStream &&
+            currentTrackStream->getPosition() + 64 * 1024 <
+                currentTrackStream->getSize();
+        if (endedEarly && !currentTrackStream->readFailed)
+          CSPOT_LOG(error, "Stream ended early at %u of %u bytes",
+                    (unsigned int)currentTrackStream->getPosition(),
+                    (unsigned int)currentTrackStream->getSize());
         if (ret == 0 && holdOnStreamLoss && currentTrackStream &&
-            currentTrackStream->readFailed) {
+            (currentTrackStream->readFailed || endedEarly)) {
           // Woken from sleep: what was loaded has played. The song waits for
-          // its reload, which resets this player, rather than ending here.
-          // (Only waiting: no reads, so no connection attempts.)
-          CSPOT_LOG(info, "Stream lost; holding the song for its reload");
+          // the connection rather than ending here: then it reads on from the
+          // same byte, or (that failing) the service reloads it, resetting
+          // this player. (Only waiting: no reads, so no connection attempts.)
+          if (retrying) {
+            retrying = false;
+            streamRetryResult = 2;
+          }
+          stalledAtMs = VORBIS_TELL_MS(&vorbisFile);
+          CSPOT_LOG(info, "Stream lost at %u ms; holding the song",
+                    (unsigned int)stalledAtMs.load());
           streamStalled = true;
           while (holdOnStreamLoss && currentSongPlaying && !pendingReset &&
-                 isRunning)
+                 isRunning) {
+            if (streamRetry.exchange(false)) {
+              retrying = true;
+              break;
+            }
             BELL_SLEEP_MS(100);
+          }
           streamStalled = false;
+          if (retrying) {
+            CSPOT_LOG(info, "Connection back; reading on");
+            currentTrackStream->readFailed = false;
+            continue;
+          }
           eof = true;  // ends the song only if nothing reset it
         } else if (ret == 0) {
           CSPOT_LOG(info, "EOF");
@@ -295,6 +323,10 @@ void TrackPlayer::runTask() {
           currentSongPlaying = false;
         } else {
           consecutiveHoles = 0;
+          if (retrying) {
+            retrying = false;
+            streamRetryResult = 1;
+          }
           if (this->dataCallback != nullptr) {
             auto toWrite = ret;
 

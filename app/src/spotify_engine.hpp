@@ -240,7 +240,8 @@ class SpotifyEngine {
                   uint32_t positionMs = 0);
   // The current song from a fresh stream, where it was. Nothing of the old
   // stream survives, so whatever a lost connection left behind cannot matter.
-  bool reloadCurrent();
+  // At positionMs, or where the clock says when it is UINT32_MAX.
+  bool reloadCurrent(uint32_t positionMs = UINT32_MAX);
   bool sessionOnline();
   void playPlaylistTrack(size_t index);
   void playQueueTrack(size_t upcomingIndex);

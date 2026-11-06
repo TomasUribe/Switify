@@ -29,6 +29,13 @@ namespace cspot {
 // (streamStalled) for the service to load it again instead of ending.
 inline std::atomic<bool> holdOnStreamLoss{false};
 inline std::atomic<bool> streamStalled{false};
+// Where the held song's decoded audio ends (ms): a reload starts there.
+inline std::atomic<uint32_t> stalledAtMs{0};
+// Set by the service once the connection is back: the held stream reads again
+// from the byte it stopped at, which continues the song without a jump.
+inline std::atomic<bool> streamRetry{false};
+// That read's outcome: 0 pending, 1 audio again, 2 failed (reload instead).
+inline std::atomic<int> streamRetryResult{0};
 
 class TrackProvider;
 class TrackQueue;
