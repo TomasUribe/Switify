@@ -248,8 +248,12 @@ void QueuedTrack::stepLoadAudioFile(
   // Request audio key
   this->pendingAudioKeyRequest = ctx->session->requestAudioKey(
       trackId, fileId,
-      [this, &trackListMutex, updateSemaphore](
+      [this, weak = weak_from_this(), &trackListMutex, updateSemaphore](
           bool success, const std::vector<uint8_t>& audioKey) {
+        // The session hands the answer over outside its lock, so the track
+        // can be gone by now (a skip): then nothing is left to fill in.
+        const auto self = weak.lock();
+        if (!self) return;
         std::scoped_lock lock(trackListMutex);
 
         if (success) {
@@ -329,8 +333,12 @@ void QueuedTrack::stepLoadMetadata(
       ref.type == TrackReference::Type::TRACK ? "track" : "episode",
       bytesToHexString(ref.gid).c_str());
 
-  auto responseHandler = [this, pbTrack, pbEpisode, &trackListMutex,
+  auto responseHandler = [this, weak = weak_from_this(), pbTrack, pbEpisode,
+                          &trackListMutex,
                           updateSemaphore](MercurySession::Response& res) {
+    // As above: a track skipped past while its metadata was on the way.
+    const auto self = weak.lock();
+    if (!self) return;
     std::scoped_lock lock(trackListMutex);
 
     if (res.parts.size() == 0) {

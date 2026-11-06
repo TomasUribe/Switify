@@ -25,6 +25,11 @@ like the original. Only the background service needs to be replaced.
   unread body left on it after a wake made every later request fail, and the song
   ended. An end far from the file's end counts as a lost stream, not the song's
   end. Songs stay held this way until 60 s after the connection came back.
+- **Skipping fast no longer crashes it.** The session hands a track's metadata or
+  audio key over outside its lock, so a track skipped past in the meantime was
+  freed under the answer (`free` in `QueuedTrack::stepParseMetadata`). Those
+  answers now hold the track through a `weak_ptr` and drop it if it is gone
+  (`TrackQueue.cpp`).
 - **New IPC command `GetAudioLevels` (38).** Returns 32 band levels of what is
   playing, for SwitchU's bars. They are computed only when requested, so nothing
   runs while a game plays unless a client asks (`switify_service.cpp`,

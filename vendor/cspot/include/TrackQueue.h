@@ -4,6 +4,7 @@
 #include <atomic>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -31,7 +32,9 @@ struct TrackInfo {
   void loadPbEpisode(Episode* pbEpisode, const std::vector<uint8_t>& gid);
 };
 
-class QueuedTrack {
+// SwitchU fork: shared_from_this, so Spotify's late answers can tell whether
+// the track still exists (skipping fast freed it under them: a crash).
+class QueuedTrack : public std::enable_shared_from_this<QueuedTrack> {
  public:
   QueuedTrack(TrackReference& ref, std::shared_ptr<cspot::Context> ctx,
               uint32_t requestedPosition = 0);
