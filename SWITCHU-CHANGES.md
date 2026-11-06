@@ -30,6 +30,12 @@ like the original. Only the background service needs to be replaced.
   `SystemPhysicalMemoryPeak` equal to its limit, FS sessions closed and the menu's
   GPU start hung. `_sbrk_r` now commits heap in 2 MiB steps up to the same ceiling
   (`engine/main.cpp`): about 2 MiB less in normal use.
+- **The service counts as an applet** (`application_type: 2` in
+  `switify-sysmodule.json`). The heap still crossed 2 MiB after a while (free gaps
+  it never returns), and HOME failed again. As an applet, pm puts it in the Applet
+  resource-limit group, beside SwitchU's daemon and menu, which has tens of MiB to
+  spare; the system's memory no longer pays for it at all. It creates no kernel
+  events, so that group's event limit does not apply.
 
 Removed again: a failed CDN read used to be retried every second for 90 s, and a
 stream open 24 times. Each retry was a TLS handshake on the system core. When a game
