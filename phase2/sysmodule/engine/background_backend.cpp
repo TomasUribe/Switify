@@ -174,7 +174,12 @@ void BackgroundBackend::process(const ControlMessage& message) {
       if (ready && engine.nowPlaying().paused) engine.playPause();
       break;
     case SwitifyIpcCommand_Pause:
-      if (ready && !engine.nowPlaying().paused) engine.playPause();
+      // From the menu: before a sleep, or for its own songs. A fade, and the
+      // queued audio, would play on after the wake.
+      if (ready && !engine.nowPlaying().paused) {
+        cspot::pauseInstantly = true;
+        engine.playPause();
+      }
       break;
     case SwitifyIpcCommand_Next:
       if (ready) engine.next();

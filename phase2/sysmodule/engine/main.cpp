@@ -107,6 +107,14 @@ void __appInit(void) {
   abortUnless(smInitialize());
   abortUnless(fsInitialize());
   abortUnless(fsdevMountSdmc());
+  // A sysmodule must tell libnx the firmware itself: without it every [4.0.0+]
+  // call refuses (audoutFlushAudioOutBuffers: 0x4b59, so a pause kept playing).
+  if (R_SUCCEEDED(setsysInitialize())) {
+    SetSysFirmwareVersion fw;
+    if (R_SUCCEEDED(setsysGetFirmwareVersion(&fw)))
+      hosversionSet(MAKEHOSVERSION(fw.major, fw.minor, fw.micro));
+    setsysExit();
+  }
   socketInitResult = socketInitialize(&SocketConfig);
 }
 

@@ -102,6 +102,34 @@ bool NXAudioSink::setParams(uint32_t sampleRate, uint8_t channelCount,
 
 void NXAudioSink::flush() { resetRequested = true; }
 
+void NXAudioSink::dropQueued() {
+  resetRequested = true;
+  currentFill = 0;
+  if (!initialized) return;
+  bool flushed = false;
+  const Result rc = audoutFlushAudioOutBuffers(&flushed);
+  if (R_FAILED(rc)) {
+    nxlog::pushf("NXAudioSink: audout flush failed: 0x%x", rc);
+    return;
+  }
+  // Flushed buffers come back as released; take them all back. Bounded: a
+  // buffer that never returns would otherwise hang the player.
+  for (int tries = 0; tries < 20; ++tries) {
+    bool any = false;
+    for (int i = 0; i < BUFFER_COUNT; ++i) any = any || bufferQueued[i];
+    if (!any) break;
+    AudioOutBuffer* released = nullptr;
+    u32 releasedCount = 0;
+    if (R_FAILED(audoutWaitPlayFinish(&released, &releasedCount, 10'000'000ULL)))
+      continue;
+    for (u32 n = 0; n < releasedCount && released != nullptr; n++) {
+      for (int i = 0; i < BUFFER_COUNT; i++)
+        if (released == &audioBuffers[i]) bufferQueued[i] = false;
+      released = (AudioOutBuffer*)released->next;
+    }
+  }
+}
+
 void NXAudioSink::setVolume(float value) {
   volume = std::clamp(value, 0.0f, 1.0f);
 }

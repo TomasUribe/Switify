@@ -1,6 +1,8 @@
 #include "NXPlayer.h"
 
 #include "NXConsoleLog.h"
+#include "NXAudioSink.h"
+#include "TrackPlayer.h"  // for cspot::pauseInstantly
 
 #include <cstdint>      // for uint8_t
 #include <chrono>
@@ -57,6 +59,7 @@ NXPlayer::NXPlayer(std::unique_ptr<AudioSink> sink,
             } else {
               this->isPaused = false;
               this->pauseRequested = false;
+              cspot::pauseInstantly = false;
             }
             break;
           case cspot::SpircHandler::EventType::FLUSH: {
@@ -128,6 +131,13 @@ void NXPlayer::runTask() {
       }
       chunk = this->centralAudioBuffer->readChunk();
 
+      if (this->pauseRequested && cspot::pauseInstantly.exchange(false)) {
+        this->pauseRequested = false;
+        this->isPaused = true;
+        static_cast<NXAudioSink*>(this->audioSink.get())->dropQueued();
+        nxlog::pushf("Pause requested (instant)");
+        continue;
+      }
       if (this->pauseRequested) {
         this->pauseRequested = false;
         nxlog::pushf("Pause requested");

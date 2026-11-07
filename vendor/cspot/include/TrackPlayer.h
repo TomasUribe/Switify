@@ -36,6 +36,9 @@ inline std::atomic<uint32_t> stalledAtMs{0};
 inline std::atomic<bool> streamRetry{false};
 // That read's outcome: 0 pending, 1 audio again, 2 failed (reload instead).
 inline std::atomic<int> streamRetryResult{0};
+// The next pause cuts at once (no fade) and drops the audio already queued for
+// the output: the menu pauses this way before the console sleeps.
+inline std::atomic<bool> pauseInstantly{false};
 
 class TrackProvider;
 class TrackQueue;

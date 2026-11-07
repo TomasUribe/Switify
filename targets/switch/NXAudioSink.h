@@ -26,6 +26,8 @@ class NXAudioSink : public AudioSink {
 
   void feedPCMFrames(const uint8_t* buffer, size_t bytes) override;
   void flush() override;
+  // Silence now: what audout still has queued is dropped (player thread only).
+  void dropQueued();
   bool setParams(uint32_t sampleRate, uint8_t channelCount,
                  uint8_t bitDepth) override;
 
