@@ -42,6 +42,7 @@ add_subdirectory(../../vendor/cspot ${CMAKE_CURRENT_BINARY_DIR}/cspot)
 add_executable(switify-background
   engine/main.cpp
   engine/background_backend.cpp
+  engine/game_volume.cpp
   source/ipc_server.c
   source/ipc_self_test.cpp
   source/switify_service.cpp

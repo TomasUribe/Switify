@@ -259,6 +259,16 @@ class SpotifyEngine {
   uint32_t computedPositionLocked() const;
   void savePlaybackSession();
   bool restorePlaybackSession();
+ public:
+  // One Switify at a time (the app or the background service): the one that
+  // takes over reads the other's saved session and plays on from there.
+  // Drops what this one had queued, then plays the saved song where it was.
+  bool adoptPlaybackSession(bool play);
+  // The session restored at start plays at once (the app took it over from
+  // the service while it played).
+  void setPlayRestoredSession(bool play) { playRestoredSession = play; }
+ private:
+  bool playRestoredSession = false;
   void refreshTrackSavedState(const std::string& uri);
   bool waitForApiRateLimitWindow();
 
