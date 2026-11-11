@@ -1060,6 +1060,7 @@ void BackgroundBackend::run() {
         process(message);
       pollPendingReload();
       game_volume::apply();
+      dealer.tick();
 
       const auto now = std::chrono::steady_clock::now();
       if (now >= nextSnapshot) {

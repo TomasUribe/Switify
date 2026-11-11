@@ -267,6 +267,18 @@ class SpotifyEngine {
   // The session restored at start plays at once (the app took it over from
   // the service while it played).
   void setPlayRestoredSession(bool play) { playRestoredSession = play; }
+
+  // Spotify Connect's current protocol (dealer + connect-state), driven by
+  // phase2/sysmodule/engine/connect_dealer.cpp: what it needs from here.
+  std::string connectDeviceId();
+  std::string connectAccessToken();       // Login5, as the dealer and spclient want
+  uint64_t spotifyTimeMs();               // Spotify's clock (synced with its servers)
+  // PUT connect-state/v1/devices/{id}: the HTTP status (0: no request).
+  int putConnectState(const std::string& connectionId, const std::vector<uint8_t>& body);
+  // Another device sent playback here: a playlist / album / liked songs from
+  // one of its tracks, at a position (on a worker; it plays when it's loaded).
+  void playContext(const std::string& contextUri, const std::string& trackUri,
+                   uint32_t positionMs, bool paused);
  private:
   bool playRestoredSession = false;
   void refreshTrackSavedState(const std::string& uri);
